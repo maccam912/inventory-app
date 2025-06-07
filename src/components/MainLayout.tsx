@@ -21,6 +21,8 @@ import {
   LocalShipping,
   SwapHoriz,
   Assessment,
+  BugReport,
+  ImportExport,
 } from '@mui/icons-material';
 import SitesPage from './SitesPage';
 import ReagentsLotsPage from './ReagentsLotsPage';
@@ -28,6 +30,8 @@ import InventoryPage from './InventoryPage';
 import ShipmentsTransfersPage from './ShipmentsTransfersPage';
 import DashboardPage from './DashboardPage';
 import ReportsPage from './ReportsPage';
+import DebugPage from './DebugPage';
+import DataManagementPage from './DataManagementPage';
 
 const drawerWidth = 240;
 
@@ -51,6 +55,8 @@ const MainLayout: React.FC = () => {
     { text: 'Inventory Records', icon: <Assessment />, component: <InventoryPage /> },
     { text: 'Shipments & Transfers', icon: <LocalShipping />, component: <ShipmentsTransfersPage /> },
     { text: 'Reports', icon: <Assessment />, component: <ReportsPage /> },
+    { text: 'Data Management', icon: <ImportExport />, component: <DataManagementPage /> },
+    { text: 'Debug Tools', icon: <BugReport />, component: <DebugPage /> },
   ];
 
   const renderContent = () => {

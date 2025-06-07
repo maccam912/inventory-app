@@ -12,6 +12,7 @@ import {
   CircularProgress,
   Chip,
   Button,
+  TextField,
 } from '@mui/material';
 import {
   LineChart,
@@ -23,6 +24,9 @@ import {
   Legend,
   ResponsiveContainer,
   ReferenceLine,
+  Area,
+  AreaChart,
+  ComposedChart,
 } from 'recharts';
 import { getDatabase } from '../utils/database';
 
@@ -39,10 +43,11 @@ interface Lot {
 
 interface InventoryDataPoint {
   date: string;
-  quantity: number;
-  event_type: 'inventory' | 'shipment' | 'transfer_in' | 'transfer_out' | 'projection';
-  cumulative_quantity: number;
-  event_details?: string;
+  cumulative_received: number;
+  cumulative_used: number;
+  current_inventory: number;
+  event_type: 'inventory' | 'shipment' | 'transfer_in' | 'transfer_out';
+  event_details: string;
 }
 
 interface UsageStats {
@@ -60,6 +65,15 @@ const ReportsPage: React.FC = () => {
   const [inventoryData, setInventoryData] = useState<InventoryDataPoint[]>([]);
   const [usageStats, setUsageStats] = useState<UsageStats | null>(null);
   const [loading, setLoading] = useState(false);
+  const [simulatedToday, setSimulatedToday] = useState<string>(new Date().toISOString().split('T')[0]);
+  
+  // Chart visibility state
+  const [chartVisibility, setChartVisibility] = useState({
+    totalReceived: true,
+    totalUsed: true,
+    currentInventory: true,
+    lowStockLine: true,
+  });
 
   useEffect(() => {
     loadSites();
@@ -67,10 +81,13 @@ const ReportsPage: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if (selectedSite || selectedLot) {
+    if (selectedLot) {
       loadInventoryChart();
+    } else {
+      setInventoryData([]);
+      setUsageStats(null);
     }
-  }, [selectedSite, selectedLot]);
+  }, [selectedSite, selectedLot, simulatedToday]);
 
   const loadSites = async () => {
     try {
@@ -98,30 +115,17 @@ const ReportsPage: React.FC = () => {
   };
 
   const loadInventoryChart = async () => {
+    if (!selectedLot) return;
+    
     setLoading(true);
     try {
       const db = await getDatabase();
-
-      // Build WHERE clause based on selections
-      let siteFilter = '';
-      let lotFilter = '';
-      let params: any[] = [];
-
-      if (selectedSite) {
-        siteFilter = 'AND site_id = $' + (params.length + 1);
-        params.push(selectedSite);
-      }
-      if (selectedLot) {
-        lotFilter = 'AND lot_id = $' + (params.length + 1);
-        params.push(selectedLot);
-      }
-
-      // For specific site/lot combination, show detailed tracking
       if (selectedSite && selectedLot) {
-        await loadDetailedInventoryChart(db, selectedSite, selectedLot);
-      } else {
-        // For "all sites" or "all lots", show aggregated data
-        await loadAggregatedInventoryChart(db, siteFilter, lotFilter, params);
+        // Show detailed CFD for specific site/lot
+        await loadCumulativeFlowChart(db, selectedSite, selectedLot);
+      } else if (selectedLot) {
+        // Show aggregated data across all sites for this lot
+        await loadAggregatedLotChart(db, selectedLot);
       }
     } catch (error) {
       console.error('Failed to load inventory chart data:', error);
@@ -130,22 +134,12 @@ const ReportsPage: React.FC = () => {
     }
   };
 
-  const loadDetailedInventoryChart = async (db: any, siteId: number, lotId: number) => {
+  const loadCumulativeFlowChart = async (db: any, siteId: number, lotId: number) => {
     const dataPoints: InventoryDataPoint[] = [];
+    const simulatedTodayDate = new Date(simulatedToday);
 
-    // Get inventory records for this specific site/lot
-    const inventoryRecords = await db.select<any[]>(`
-      SELECT ir.recorded_date as date, ir.quantity_on_hand as quantity,
-             s.name as site_name, r.name as reagent_name, l.lot_number
-      FROM inventory_records ir
-      JOIN sites s ON ir.site_id = s.id
-      JOIN lots l ON ir.lot_id = l.id
-      JOIN reagents r ON l.reagent_id = r.id
-      WHERE ir.site_id = $1 AND ir.lot_id = $2
-      ORDER BY ir.recorded_date ASC
-    `, [siteId, lotId]);
-
-    // Get shipments to this site for this lot
+    // Get all events for this specific site/lot combination
+    // Get shipments received at this site for this lot (up to simulated today)
     const shipments = await db.select<any[]>(`
       SELECT sh.received_date as date, sh.quantity,
              s.name as site_name, r.name as reagent_name, l.lot_number
@@ -153,22 +147,13 @@ const ReportsPage: React.FC = () => {
       JOIN sites s ON sh.site_id = s.id
       JOIN lots l ON sh.lot_id = l.id
       JOIN reagents r ON l.reagent_id = r.id
-      WHERE sh.site_id = $1 AND sh.lot_id = $2 AND sh.received_date IS NOT NULL
+      WHERE sh.site_id = $1 AND sh.lot_id = $2 
+      AND sh.received_date IS NOT NULL 
+      AND sh.received_date <= $3
       ORDER BY sh.received_date ASC
-    `, [siteId, lotId]);
+    `, [siteId, lotId, simulatedToday]);
 
-    // Get transfers for this site/lot
-    const transfersOut = await db.select<any[]>(`
-      SELECT t.transfer_date as date, -t.quantity as quantity,
-             s.name as site_name, r.name as reagent_name, l.lot_number
-      FROM transfers t
-      JOIN sites s ON t.from_site_id = s.id
-      JOIN lots l ON t.lot_id = l.id
-      JOIN reagents r ON l.reagent_id = r.id
-      WHERE t.from_site_id = $1 AND t.lot_id = $2
-      ORDER BY t.transfer_date ASC
-    `, [siteId, lotId]);
-
+    // Get transfers into this site for this lot (up to simulated today)
     const transfersIn = await db.select<any[]>(`
       SELECT t.transfer_date as date, t.quantity,
              s.name as site_name, r.name as reagent_name, l.lot_number
@@ -176,131 +161,256 @@ const ReportsPage: React.FC = () => {
       JOIN sites s ON t.to_site_id = s.id
       JOIN lots l ON t.lot_id = l.id
       JOIN reagents r ON l.reagent_id = r.id
-      WHERE t.to_site_id = $1 AND t.lot_id = $2
+      WHERE t.to_site_id = $1 AND t.lot_id = $2 AND t.transfer_date <= $3
       ORDER BY t.transfer_date ASC
-    `, [siteId, lotId]);
+    `, [siteId, lotId, simulatedToday]);
 
-    // Combine and sort all events
-    const allEvents: any[] = [
-      ...inventoryRecords.map(r => ({ ...r, event_type: 'inventory' })),
-      ...shipments.map(s => ({ ...s, event_type: 'shipment' })),
-      ...transfersOut.map(t => ({ ...t, event_type: 'transfer_out' })),
-      ...transfersIn.map(t => ({ ...t, event_type: 'transfer_in' })),
-    ].filter(event => event.date) // Remove events without dates
+    // Get transfers out of this site for this lot (up to simulated today)
+    const transfersOut = await db.select<any[]>(`
+      SELECT t.transfer_date as date, -t.quantity as quantity,
+             s.name as site_name, r.name as reagent_name, l.lot_number
+      FROM transfers t
+      JOIN sites s ON t.from_site_id = s.id
+      JOIN lots l ON t.lot_id = l.id
+      JOIN reagents r ON l.reagent_id = r.id
+      WHERE t.from_site_id = $1 AND t.lot_id = $2 AND t.transfer_date <= $3
+      ORDER BY t.transfer_date ASC
+    `, [siteId, lotId, simulatedToday]);
+
+    // Get inventory snapshots for this site/lot (up to simulated today)
+    const inventoryRecords = await db.select<any[]>(`
+      SELECT ir.recorded_date as date, ir.quantity_on_hand as quantity,
+             s.name as site_name, r.name as reagent_name, l.lot_number
+      FROM inventory_records ir
+      JOIN sites s ON ir.site_id = s.id
+      JOIN lots l ON ir.lot_id = l.id
+      JOIN reagents r ON l.reagent_id = r.id
+      WHERE ir.site_id = $1 AND ir.lot_id = $2 AND ir.recorded_date <= $3
+      ORDER BY ir.recorded_date ASC
+    `, [siteId, lotId, simulatedToday]);
+
+    // Combine all receiving events (shipments + transfers in)
+    const receivingEvents = [
+      ...shipments.map(s => ({ ...s, event_type: 'shipment' as const })),
+      ...transfersIn.map(t => ({ ...t, event_type: 'transfer_in' as const })),
+    ].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+    // Combine all outgoing events (transfers out)
+    const outgoingEvents = transfersOut.map(t => ({ ...t, event_type: 'transfer_out' as const }));
+
+    // All events combined
+    const allEvents = [
+      ...receivingEvents,
+      ...outgoingEvents,
+      ...inventoryRecords.map(r => ({ ...r, event_type: 'inventory' as const })),
+    ].filter(event => event.date)
      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
-    // Track inventory level through events
-    let currentQuantity = 0;
-    let hasInventoryBaseline = false;
+    // Calculate cumulative flow
+    let cumulativeReceived = 0;
+    let currentInventory = 0;
+    let hasFirstInventory = false;
 
     allEvents.forEach(event => {
-      if (event.event_type === 'inventory') {
-        // Inventory records are absolute values
-        currentQuantity = event.quantity;
-        hasInventoryBaseline = true;
-      } else if (hasInventoryBaseline) {
-        // Only apply shipments/transfers after we have an inventory baseline
-        if (event.event_type === 'shipment' || event.event_type === 'transfer_in') {
-          currentQuantity += event.quantity;
-        } else if (event.event_type === 'transfer_out') {
-          currentQuantity += event.quantity; // quantity is already negative
-        }
+      // Track cumulative received (only goes up, never down)
+      if (event.event_type === 'shipment' || event.event_type === 'transfer_in') {
+        cumulativeReceived += event.quantity;
+      } else if (event.event_type === 'transfer_out') {
+        // Transfers out reduce cumulative received (since we're sending it elsewhere)
+        cumulativeReceived += event.quantity; // quantity is already negative
       }
+
+      // Track current inventory
+      if (event.event_type === 'inventory') {
+        currentInventory = event.quantity;
+        hasFirstInventory = true;
+      } else if (hasFirstInventory) {
+        // Apply changes to inventory after we have a baseline
+        if (event.event_type === 'shipment' || event.event_type === 'transfer_in') {
+          currentInventory += event.quantity;
+        } else if (event.event_type === 'transfer_out') {
+          currentInventory += event.quantity; // quantity is already negative
+        }
+      } else if (event.event_type === 'shipment' || event.event_type === 'transfer_in') {
+        // Before first inventory record, assume inventory equals cumulative received
+        // (don't assume zero inventory before first record)
+        currentInventory = cumulativeReceived;
+      }
+
+      // Calculate cumulative used = cumulative received - current inventory
+      const cumulativeUsed = Math.max(0, cumulativeReceived - currentInventory);
 
       dataPoints.push({
         date: event.date,
-        quantity: event.quantity,
+        cumulative_received: cumulativeReceived,
+        cumulative_used: cumulativeUsed,
+        current_inventory: currentInventory,
         event_type: event.event_type,
-        cumulative_quantity: currentQuantity,
         event_details: `${event.reagent_name} - ${event.lot_number} @ ${event.site_name}`,
       });
     });
 
-    // Calculate usage statistics
-    const inventorySnapshots = dataPoints.filter(p => p.event_type === 'inventory');
-    if (inventorySnapshots.length >= 2) {
-      const firstSnapshot = inventorySnapshots[0];
-      const lastSnapshot = inventorySnapshots[inventorySnapshots.length - 1];
-      const totalConsumed = firstSnapshot.quantity - lastSnapshot.quantity;
-      const daysOfData = Math.max(1, (new Date(lastSnapshot.date).getTime() - new Date(firstSnapshot.date).getTime()) / (1000 * 60 * 60 * 24));
-      const averageDailyUsage = totalConsumed / daysOfData;
+    // Calculate usage statistics based on the CFD data
+    if (dataPoints.length > 0) {
+      const lastDataPoint = dataPoints[dataPoints.length - 1];
+      const firstDataPoint = dataPoints[0];
+      
+      // Total consumed = cumulative used (red area)
+      const totalConsumed = lastDataPoint.cumulative_used;
+      
+      // Get the time span from first to last data point
+      const daysOfData = Math.max(1, (new Date(lastDataPoint.date).getTime() - new Date(firstDataPoint.date).getTime()) / (1000 * 60 * 60 * 24));
+      const averageDailyUsage = Math.max(0, totalConsumed / daysOfData);
       
       setUsageStats({
         total_consumed: Math.max(0, totalConsumed),
-        average_daily_usage: Math.max(0, averageDailyUsage),
+        average_daily_usage: averageDailyUsage,
         days_of_data: Math.round(daysOfData),
-        projected_days_remaining: averageDailyUsage > 0 ? Math.round(lastSnapshot.quantity / averageDailyUsage) : 0,
+        projected_days_remaining: averageDailyUsage > 0 ? Math.round(lastDataPoint.current_inventory / averageDailyUsage) : 0,
       });
-
-      // Add projection points if we have positive usage
-      if (averageDailyUsage > 0 && lastSnapshot.quantity > 0) {
-        const projectionDays = Math.min(90, Math.ceil(lastSnapshot.quantity / averageDailyUsage));
-        const startDate = new Date(lastSnapshot.date);
-        
-        for (let i = 1; i <= projectionDays; i++) {
-          const projectionDate = new Date(startDate.getTime() + (i * 24 * 60 * 60 * 1000));
-          const projectedQuantity = Math.max(0, lastSnapshot.quantity - (averageDailyUsage * i));
-          
-          dataPoints.push({
-            date: projectionDate.toISOString().split('T')[0],
-            quantity: projectedQuantity,
-            event_type: 'projection',
-            cumulative_quantity: projectedQuantity,
-            event_details: 'Projected usage based on historical consumption',
-          });
-
-          if (projectedQuantity <= 0) break;
-        }
-      }
+    } else {
+      setUsageStats(null);
     }
 
     setInventoryData(dataPoints);
   };
 
-  const loadAggregatedInventoryChart = async (db: any, siteFilter: string, lotFilter: string, params: any[]) => {
-    // For aggregated view, show total quantities across all selected sites/lots
+  const loadAggregatedLotChart = async (db: any, lotId: number) => {
+    const dataPoints: InventoryDataPoint[] = [];
+    const simulatedTodayDate = new Date(simulatedToday);
+
+    // Get all shipments for this lot across all sites (up to simulated today)
+    const shipments = await db.select<any[]>(`
+      SELECT sh.received_date as date, SUM(sh.quantity) as quantity,
+             r.name as reagent_name, l.lot_number
+      FROM shipments sh
+      JOIN lots l ON sh.lot_id = l.id
+      JOIN reagents r ON l.reagent_id = r.id
+      WHERE sh.lot_id = $1 
+      AND sh.received_date IS NOT NULL 
+      AND sh.received_date <= $2
+      GROUP BY sh.received_date, r.name, l.lot_number
+      ORDER BY sh.received_date ASC
+    `, [lotId, simulatedToday]);
+
+    // Get all transfers for this lot across all sites (up to simulated today)
+    const transfersIn = await db.select<any[]>(`
+      SELECT t.transfer_date as date, SUM(t.quantity) as quantity,
+             r.name as reagent_name, l.lot_number
+      FROM transfers t
+      JOIN lots l ON t.lot_id = l.id
+      JOIN reagents r ON l.reagent_id = r.id
+      WHERE t.lot_id = $1 AND t.transfer_date <= $2
+      GROUP BY t.transfer_date, r.name, l.lot_number
+      ORDER BY t.transfer_date ASC
+    `, [lotId, simulatedToday]);
+
+    const transfersOut = await db.select<any[]>(`
+      SELECT t.transfer_date as date, -SUM(t.quantity) as quantity,
+             r.name as reagent_name, l.lot_number
+      FROM transfers t
+      JOIN lots l ON t.lot_id = l.id
+      JOIN reagents r ON l.reagent_id = r.id
+      WHERE t.lot_id = $1 AND t.transfer_date <= $2
+      GROUP BY t.transfer_date, r.name, l.lot_number
+      ORDER BY t.transfer_date ASC
+    `, [lotId, simulatedToday]);
+
+    // Get aggregated inventory records for this lot (sum across all sites by date)
     const inventoryRecords = await db.select<any[]>(`
-      SELECT ir.recorded_date as date, 
-             SUM(ir.quantity_on_hand) as total_quantity,
-             COUNT(DISTINCT ir.site_id) as site_count,
-             COUNT(DISTINCT ir.lot_id) as lot_count
+      SELECT ir.recorded_date as date, SUM(ir.quantity_on_hand) as quantity,
+             r.name as reagent_name, l.lot_number
       FROM inventory_records ir
-      JOIN sites s ON ir.site_id = s.id
       JOIN lots l ON ir.lot_id = l.id
-      WHERE s.is_active = 1 ${siteFilter} ${lotFilter}
-      GROUP BY ir.recorded_date
+      JOIN reagents r ON l.reagent_id = r.id
+      WHERE ir.lot_id = $1 AND ir.recorded_date <= $2
+      GROUP BY ir.recorded_date, r.name, l.lot_number
       ORDER BY ir.recorded_date ASC
-    `, params);
+    `, [lotId, simulatedToday]);
 
-    const dataPoints: InventoryDataPoint[] = inventoryRecords.map(record => ({
-      date: record.date,
-      quantity: record.total_quantity,
-      event_type: 'inventory' as const,
-      cumulative_quantity: record.total_quantity,
-      event_details: `Total across ${record.site_count} site(s), ${record.lot_count} lot(s)`,
-    }));
+    // Combine all events
+    const allEvents = [
+      ...shipments.map(s => ({ ...s, event_type: 'shipment' as const })),
+      ...transfersIn.map(t => ({ ...t, event_type: 'transfer_in' as const })),
+      ...transfersOut.map(t => ({ ...t, event_type: 'transfer_out' as const })),
+      ...inventoryRecords.map(r => ({ ...r, event_type: 'inventory' as const })),
+    ].filter(event => event.date)
+     .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
-    // Calculate basic stats for aggregated view
-    if (dataPoints.length >= 2) {
-      const firstSnapshot = dataPoints[0];
-      const lastSnapshot = dataPoints[dataPoints.length - 1];
-      const totalChange = lastSnapshot.quantity - firstSnapshot.quantity;
-      const daysOfData = Math.max(1, (new Date(lastSnapshot.date).getTime() - new Date(firstSnapshot.date).getTime()) / (1000 * 60 * 60 * 24));
+    // Calculate cumulative flow for aggregated data
+    let cumulativeReceived = 0;
+    let currentInventory = 0;
+    let hasFirstInventory = false;
+
+    allEvents.forEach(event => {
+      // Track cumulative received across all sites
+      if (event.event_type === 'shipment' || event.event_type === 'transfer_in') {
+        cumulativeReceived += event.quantity;
+      } else if (event.event_type === 'transfer_out') {
+        cumulativeReceived += event.quantity; // quantity is already negative
+      }
+
+      // Track current inventory (aggregated across sites)
+      if (event.event_type === 'inventory') {
+        currentInventory = event.quantity;
+        hasFirstInventory = true;
+      } else if (hasFirstInventory) {
+        // Apply changes to inventory after we have a baseline
+        if (event.event_type === 'shipment' || event.event_type === 'transfer_in') {
+          currentInventory += event.quantity;
+        } else if (event.event_type === 'transfer_out') {
+          currentInventory += event.quantity; // quantity is already negative
+        }
+      } else if (event.event_type === 'shipment' || event.event_type === 'transfer_in') {
+        // Before first inventory record, assume inventory equals cumulative received
+        currentInventory = cumulativeReceived;
+      }
+
+      // Calculate cumulative used = cumulative received - current inventory
+      const cumulativeUsed = Math.max(0, cumulativeReceived - currentInventory);
+
+      dataPoints.push({
+        date: event.date,
+        cumulative_received: cumulativeReceived,
+        cumulative_used: cumulativeUsed,
+        current_inventory: currentInventory,
+        event_type: event.event_type,
+        event_details: `${event.reagent_name} - ${event.lot_number} (All Sites)`,
+      });
+    });
+
+    // Calculate usage statistics for aggregated data
+    if (dataPoints.length > 0) {
+      const lastDataPoint = dataPoints[dataPoints.length - 1];
+      const firstDataPoint = dataPoints[0];
+      
+      // Total consumed = cumulative used (red area)
+      const totalConsumed = lastDataPoint.cumulative_used;
+      
+      // Get the time span from first to last data point
+      const daysOfData = Math.max(1, (new Date(lastDataPoint.date).getTime() - new Date(firstDataPoint.date).getTime()) / (1000 * 60 * 60 * 24));
+      const averageDailyUsage = Math.max(0, totalConsumed / daysOfData);
       
       setUsageStats({
-        total_consumed: Math.max(0, -totalChange), // If negative change, that's consumption
-        average_daily_usage: Math.max(0, -totalChange / daysOfData),
+        total_consumed: Math.max(0, totalConsumed),
+        average_daily_usage: averageDailyUsage,
         days_of_data: Math.round(daysOfData),
-        projected_days_remaining: 0, // Don't project for aggregated view
+        projected_days_remaining: averageDailyUsage > 0 ? Math.round(lastDataPoint.current_inventory / averageDailyUsage) : 0,
       });
+    } else {
+      setUsageStats(null);
     }
 
     setInventoryData(dataPoints);
   };
 
   const formatTooltip = (value: any, name: string, props: any) => {
-    if (name === 'cumulative_quantity') {
-      return [`${value} units`, 'Inventory Level'];
+    if (name === 'cumulative_received') {
+      return [`${value} units`, 'Total Received'];
+    } else if (name === 'cumulative_used') {
+      return [`${value} units`, 'Total Used'];
+    } else if (name === 'current_inventory') {
+      return [`${value} units`, 'Current Inventory'];
     }
     return [value, name];
   };
@@ -323,7 +433,21 @@ const ReportsPage: React.FC = () => {
       const lot = lots.find(l => l.id === selectedLot);
       parts.push(`Lot: ${lot?.reagent_name} - ${lot?.lot_number}`);
     }
-    return parts.length > 0 ? parts.join(', ') : 'All sites and lots';
+    if (selectedLot && selectedSite) {
+      return parts.join(', ');
+    } else if (selectedLot && !selectedSite) {
+      return `${parts[0]} (All Sites)`;
+    } else if (parts.length === 1) {
+      return parts[0] + ' (select lot to view chart)';
+    }
+    return 'Please select a lot to view cumulative flow diagram';
+  };
+
+  const toggleChartComponent = (component: keyof typeof chartVisibility) => {
+    setChartVisibility(prev => ({
+      ...prev,
+      [component]: !prev[component]
+    }));
   };
 
   return (
@@ -332,9 +456,23 @@ const ReportsPage: React.FC = () => {
         <Typography variant="h4" component="h1">
           Reports & Analytics
         </Typography>
-        <Button variant="outlined" onClick={loadInventoryChart}>
-          Refresh
-        </Button>
+        <Box display="flex" alignItems="center" gap={2}>
+          <TextField
+            label="Simulated Date"
+            type="date"
+            value={simulatedToday}
+            onChange={(e) => setSimulatedToday(e.target.value)}
+            size="small"
+            InputLabelProps={{
+              shrink: true,
+            }}
+            helperText="View data as of this date"
+            sx={{ minWidth: 200 }}
+          />
+          <Button variant="outlined" onClick={loadInventoryChart}>
+            Refresh
+          </Button>
+        </Box>
       </Box>
 
       {/* Filters */}
@@ -379,8 +517,14 @@ const ReportsPage: React.FC = () => {
               </FormControl>
             </Grid>
           </Grid>
-          <Box mt={2}>
+          <Box mt={2} display="flex" gap={1} alignItems="center">
             <Chip label={getFilterDescription()} variant="outlined" />
+            <Chip 
+              label={`Viewing as of: ${simulatedToday}`} 
+              variant="outlined" 
+              color="primary"
+              size="small"
+            />
           </Box>
         </CardContent>
       </Card>
@@ -430,26 +574,87 @@ const ReportsPage: React.FC = () => {
         </Card>
       )}
 
-      {/* Inventory Chart */}
+      {/* Cumulative Flow Chart */}
       <Card>
         <CardContent>
-          <Typography variant="h6" gutterBottom>
-            Inventory Levels Over Time
-          </Typography>
+          <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
+            <Typography variant="h6">
+              Cumulative Flow Diagram
+            </Typography>
+            {selectedLot && (
+              <Box display="flex" flexDirection="column" alignItems="flex-end" gap={1}>
+                <Typography variant="caption" color="textSecondary">
+                  Click to show/hide chart components:
+                </Typography>
+                <Box display="flex" gap={1} flexWrap="wrap">
+                  <Chip
+                    label="Total Received"
+                    onClick={() => toggleChartComponent('totalReceived')}
+                    sx={{ 
+                      backgroundColor: chartVisibility.totalReceived ? '#4caf50' : '#e0e0e0',
+                      color: chartVisibility.totalReceived ? 'white' : 'black',
+                      '&:hover': { backgroundColor: chartVisibility.totalReceived ? '#45a049' : '#d0d0d0' }
+                    }}
+                    clickable
+                  />
+                  <Chip
+                    label="Total Used"
+                    onClick={() => toggleChartComponent('totalUsed')}
+                    sx={{ 
+                      backgroundColor: chartVisibility.totalUsed ? '#f44336' : '#e0e0e0',
+                      color: chartVisibility.totalUsed ? 'white' : 'black',
+                      '&:hover': { backgroundColor: chartVisibility.totalUsed ? '#e53935' : '#d0d0d0' }
+                    }}
+                    clickable
+                  />
+                  <Chip
+                    label="Current Inventory"
+                    onClick={() => toggleChartComponent('currentInventory')}
+                    sx={{ 
+                      backgroundColor: chartVisibility.currentInventory ? '#2196f3' : '#e0e0e0',
+                      color: chartVisibility.currentInventory ? 'white' : 'black',
+                      '&:hover': { backgroundColor: chartVisibility.currentInventory ? '#1976d2' : '#d0d0d0' }
+                    }}
+                    clickable
+                  />
+                  <Chip
+                    label="Low Stock Line"
+                    onClick={() => toggleChartComponent('lowStockLine')}
+                    sx={{ 
+                      backgroundColor: chartVisibility.lowStockLine ? '#ff9800' : '#e0e0e0',
+                      color: chartVisibility.lowStockLine ? 'white' : 'black',
+                      '&:hover': { backgroundColor: chartVisibility.lowStockLine ? '#f57c00' : '#d0d0d0' }
+                    }}
+                    clickable
+                  />
+                </Box>
+              </Box>
+            )}
+          </Box>
           
-          {loading ? (
+          {!selectedLot ? (
+            <Box display="flex" justifyContent="center" alignItems="center" height="400px">
+              <Typography color="textSecondary" textAlign="center">
+                Please select a lot to view the cumulative flow diagram.
+                <br />
+                Select both site and lot for detailed analysis, or just lot for aggregated view across all sites.
+                <br />
+                This chart shows total received inventory vs. total used inventory over time.
+              </Typography>
+            </Box>
+          ) : loading ? (
             <Box display="flex" justifyContent="center" alignItems="center" height="400px">
               <CircularProgress />
             </Box>
           ) : inventoryData.length === 0 ? (
             <Box display="flex" justifyContent="center" alignItems="center" height="400px">
               <Typography color="textSecondary">
-                No data available for the selected filters
+                No data available for this site/lot combination
               </Typography>
             </Box>
           ) : (
             <ResponsiveContainer width="100%" height={500}>
-              <LineChart data={inventoryData}>
+              <ComposedChart data={inventoryData}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis 
                   dataKey="date" 
@@ -467,37 +672,77 @@ const ReportsPage: React.FC = () => {
                 />
                 <Legend />
                 
-                {/* Main inventory line */}
-                <Line
-                  type="monotone"
-                  dataKey="cumulative_quantity"
-                  stroke="#2196f3"
-                  strokeWidth={2}
-                  dot={(props) => {
-                    const { payload } = props;
-                    if (payload.event_type === 'projection') {
-                      return <circle {...props} fill="#ff9800" strokeWidth={2} r={3} strokeDasharray="5,5" />;
-                    }
-                    return <circle {...props} fill="#2196f3" r={4} />;
-                  }}
-                  strokeDasharray={(entry) => entry && entry.event_type === 'projection' ? '5,5' : '0'}
-                />
+                {/* Cumulative received area (total inventory that has entered this site) */}
+                {chartVisibility.totalReceived && (
+                  <Area
+                    type="stepAfter"
+                    dataKey="cumulative_received"
+                    stroke="#4caf50"
+                    fill="#4caf50"
+                    fillOpacity={0.3}
+                    strokeWidth={3}
+                    name="Total Received"
+                  />
+                )}
+                
+                {/* Cumulative used area (total inventory consumed) */}
+                {chartVisibility.totalUsed && (
+                  <Area
+                    type="monotone"
+                    dataKey="cumulative_used"
+                    stroke="#f44336"
+                    fill="#f44336"
+                    fillOpacity={0.4}
+                    strokeWidth={3}
+                    name="Total Used"
+                  />
+                )}
+                
+                {/* Current inventory line (what's actually on hand) */}
+                {chartVisibility.currentInventory && (
+                  <Line
+                    type="monotone"
+                    dataKey="current_inventory"
+                    stroke="#2196f3"
+                    strokeWidth={2}
+                    dot={(props) => {
+                      const { payload } = props;
+                      if (payload.event_type === 'inventory') {
+                        return <circle {...props} fill="#2196f3" r={4} />;
+                      }
+                      return null;
+                    }}
+                    name="Current Inventory"
+                  />
+                )}
                 
                 {/* Reference line for low stock */}
-                <ReferenceLine y={5} stroke="#f44336" strokeDasharray="5 5" label="Low Stock Threshold" />
-              </LineChart>
+                {chartVisibility.lowStockLine && (
+                  <ReferenceLine y={5} stroke="#ff9800" strokeDasharray="5 5" label="Low Stock Threshold" />
+                )}
+              </ComposedChart>
             </ResponsiveContainer>
           )}
           
-          <Box mt={2}>
-            <Typography variant="body2" color="textSecondary">
-              • Solid line shows actual inventory levels from recorded data
-              <br />
-              • Dashed line shows projected usage based on historical consumption rates
-              <br />
-              • Red dashed line indicates low stock threshold (5 units)
-            </Typography>
-          </Box>
+          {selectedLot && (
+            <Box mt={2}>
+              <Typography variant="body2" color="textSecondary">
+                • <span style={{color: '#4caf50'}}>Green area</span>: Total quantity received {selectedSite ? 'at this site' : 'across all sites'} (shipments + transfers in - transfers out)
+                <br />
+                • <span style={{color: '#f44336'}}>Red area</span>: Total quantity consumed (calculated from inventory records)
+                <br />
+                • <span style={{color: '#2196f3'}}>Blue line</span>: Current inventory on hand (from inventory records)
+                <br />
+                • The gap between green and red areas represents current inventory + waste/spoilage
+                {!selectedSite && (
+                  <>
+                    <br />
+                    • <strong>Aggregated view</strong>: Data summed across all sites for this lot
+                  </>
+                )}
+              </Typography>
+            </Box>
+          )}
         </CardContent>
       </Card>
     </Box>
