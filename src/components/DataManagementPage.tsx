@@ -155,34 +155,93 @@ const DataManagementPage: React.FC = () => {
 
       const db = await getDatabase();
       let importedCount = 0;
-
-      // Import data based on what's in the file
-      const tables = ['sites', 'reagents', 'lots', 'shipments', 'transfers', 'inventory_records'];
       
-      for (const table of tables) {
+      // ID mapping for foreign key relationships
+      const idMappings = {
+        sites: new Map(),
+        reagents: new Map(),
+        lots: new Map()
+      };
+
+      // Import data in correct order respecting foreign key dependencies
+      const tableOrder = [
+        { name: 'sites', deps: [] },
+        { name: 'reagents', deps: [] },
+        { name: 'lots', deps: ['reagents'] },
+        { name: 'shipments', deps: ['lots', 'sites'] },
+        { name: 'transfers', deps: ['lots', 'sites'] },
+        { name: 'inventory_records', deps: ['lots', 'sites'] }
+      ];
+      
+      for (const tableInfo of tableOrder) {
+        const table = tableInfo.name;
+        
         if (importData[table] && Array.isArray(importData[table])) {
           const data = importData[table];
+          console.log(`Importing ${data.length} records into ${table}`);
           
           for (const row of data) {
             try {
-              // Remove id field to let database auto-increment
-              const { id, created_at, updated_at, ...rowData } = row;
+              // Remove id field and timestamps to let database auto-increment/set
+              const { id: oldId, created_at, updated_at, ...rowData } = row;
+              
+              // Map foreign key references to new IDs
+              if (table === 'lots' && rowData.reagent_id && idMappings.reagents.has(rowData.reagent_id)) {
+                rowData.reagent_id = idMappings.reagents.get(rowData.reagent_id);
+              }
+              
+              if (table === 'shipments') {
+                if (rowData.lot_id && idMappings.lots.has(rowData.lot_id)) {
+                  rowData.lot_id = idMappings.lots.get(rowData.lot_id);
+                }
+                if (rowData.site_id && idMappings.sites.has(rowData.site_id)) {
+                  rowData.site_id = idMappings.sites.get(rowData.site_id);
+                }
+              }
+              
+              if (table === 'transfers') {
+                if (rowData.lot_id && idMappings.lots.has(rowData.lot_id)) {
+                  rowData.lot_id = idMappings.lots.get(rowData.lot_id);
+                }
+                if (rowData.from_site_id && idMappings.sites.has(rowData.from_site_id)) {
+                  rowData.from_site_id = idMappings.sites.get(rowData.from_site_id);
+                }
+                if (rowData.to_site_id && idMappings.sites.has(rowData.to_site_id)) {
+                  rowData.to_site_id = idMappings.sites.get(rowData.to_site_id);
+                }
+              }
+              
+              if (table === 'inventory_records') {
+                if (rowData.lot_id && idMappings.lots.has(rowData.lot_id)) {
+                  rowData.lot_id = idMappings.lots.get(rowData.lot_id);
+                }
+                if (rowData.site_id && idMappings.sites.has(rowData.site_id)) {
+                  rowData.site_id = idMappings.sites.get(rowData.site_id);
+                }
+              }
               
               const columns = Object.keys(rowData);
               const values = Object.values(rowData);
               const placeholders = columns.map((_, i) => `$${i + 1}`).join(', ');
               
-              const insertQuery = `INSERT INTO ${table} (${columns.join(', ')}) VALUES (${placeholders})`;
-              await db.execute(insertQuery, values);
+              const insertQuery = `INSERT INTO ${table} (${columns.join(', ')}) VALUES (${placeholders}) RETURNING id`;
+              const result = await db.select(insertQuery, values);
+              
+              // Store the ID mapping for foreign key references
+              if (result.length > 0 && ['sites', 'reagents', 'lots'].includes(table)) {
+                const newId = result[0].id;
+                idMappings[table as keyof typeof idMappings].set(oldId, newId);
+              }
+              
               importedCount++;
             } catch (error) {
-              console.warn(`Failed to import row from ${table}:`, error);
+              console.warn(`Failed to import row from ${table}:`, error, row);
             }
           }
         }
       }
 
-      setMessage(`Import completed successfully! Imported ${importedCount} records.`);
+      setMessage(`Import completed successfully! Imported ${importedCount} records across ${tableOrder.length} tables.`);
     } catch (error) {
       console.error('Failed to import data:', error);
       setMessage(`Failed to import data: ${error}`);

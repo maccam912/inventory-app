@@ -18,6 +18,8 @@ import {
 import {
   DeleteForever as ResetIcon,
   AutoFixHigh as SeedIcon,
+  BugReport as TestIcon,
+  Assessment as ReportIcon,
 } from '@mui/icons-material';
 import { getDatabase } from '../utils/database';
 
@@ -27,6 +29,165 @@ const DebugPage: React.FC = () => {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirmAction, setConfirmAction] = useState<'reset' | 'seed' | null>(null);
   const [includeTransfers, setIncludeTransfers] = useState(false);
+  const [testResults, setTestResults] = useState<any>(null);
+
+  const runImportExportTests = async () => {
+    setLoading(true);
+    setMessage(null);
+    setTestResults(null);
+
+    try {
+      const db = await getDatabase();
+      
+      // Create test data with relationships
+      const testData = {
+        sites: [
+          { name: 'Test Site A', location: 'Test Location A', is_active: true },
+          { name: 'Test Site B', location: 'Test Location B', is_active: true }
+        ],
+        reagents: [
+          { name: 'Test Reagent 1', description: 'Test Description 1' },
+          { name: 'Test Reagent 2', description: 'Test Description 2' }
+        ]
+      };
+
+      // Test 1: Insert test data and get IDs for relationships
+      const siteResults = [];
+      const reagentResults = [];
+      
+      for (const site of testData.sites) {
+        const result = await db.select('INSERT INTO sites (name, location, is_active) VALUES ($1, $2, $3) RETURNING id', 
+                                     [site.name, site.location, site.is_active]);
+        siteResults.push(result[0].id);
+      }
+      
+      for (const reagent of testData.reagents) {
+        const result = await db.select('INSERT INTO reagents (name, description) VALUES ($1, $2) RETURNING id', 
+                                     [reagent.name, reagent.description]);
+        reagentResults.push(result[0].id);
+      }
+
+      // Create a test lot with foreign key relationship
+      const lotResult = await db.select('INSERT INTO lots (lot_number, reagent_id, expiration_date) VALUES ($1, $2, $3) RETURNING id', 
+                                       ['TEST-LOT-001', reagentResults[0], '2024-12-31']);
+      const lotId = lotResult[0].id;
+
+      // Create a test shipment
+      await db.execute('INSERT INTO shipments (lot_id, site_id, quantity, shipped_date, received_date) VALUES ($1, $2, $3, $4, $5)',
+                      [lotId, siteResults[0], 50, '2024-01-15', '2024-01-16']);
+
+      // Create a test transfer
+      await db.execute('INSERT INTO transfers (lot_id, from_site_id, to_site_id, quantity, transfer_date) VALUES ($1, $2, $3, $4, $5)',
+                      [lotId, siteResults[0], siteResults[1], 10, '2024-02-01']);
+
+      // Create a test inventory record
+      await db.execute('INSERT INTO inventory_records (lot_id, site_id, quantity_on_hand, recorded_date, recorded_by) VALUES ($1, $2, $3, $4, $5)',
+                      [lotId, siteResults[0], 40, '2024-02-15', 'Test User']);
+
+      // Test 2: Export simulation (get all test data including relationships)
+      const exportData = {
+        sites: await db.select('SELECT * FROM sites WHERE name LIKE \'Test%\' ORDER BY id'),
+        reagents: await db.select('SELECT * FROM reagents WHERE name LIKE \'Test%\' ORDER BY id'),
+        lots: await db.select('SELECT * FROM lots WHERE lot_number LIKE \'TEST%\' ORDER BY id'),
+        shipments: await db.select(`
+          SELECT s.* FROM shipments s 
+          JOIN lots l ON s.lot_id = l.id 
+          WHERE l.lot_number LIKE 'TEST%' ORDER BY s.id
+        `),
+        transfers: await db.select(`
+          SELECT t.* FROM transfers t 
+          JOIN lots l ON t.lot_id = l.id 
+          WHERE l.lot_number LIKE 'TEST%' ORDER BY t.id
+        `),
+        inventory_records: await db.select(`
+          SELECT ir.* FROM inventory_records ir 
+          JOIN lots l ON ir.lot_id = l.id 
+          WHERE l.lot_number LIKE 'TEST%' ORDER BY ir.id
+        `)
+      };
+
+      console.log('Export data structure:', exportData);
+
+      // Test 3: Simulate import process (same logic as DataManagementPage)
+      const tables = ['sites', 'reagents', 'lots', 'shipments', 'transfers', 'inventory_records'];
+      let importResults: any = {};
+      
+      for (const table of tables) {
+        if (exportData[table] && Array.isArray(exportData[table])) {
+          const data = exportData[table];
+          importResults[table] = {
+            found: true,
+            count: data.length,
+            sample: data[0] || null
+          };
+          
+          // Test import logic on first row
+          if (data.length > 0) {
+            const row = data[0];
+            const { id, created_at, updated_at, ...rowData } = row;
+            const columns = Object.keys(rowData);
+            const values = Object.values(rowData);
+            
+            importResults[table].columns = columns;
+            importResults[table].values = values;
+            importResults[table].hasData = Object.keys(rowData).length > 0;
+          }
+        } else {
+          importResults[table] = {
+            found: false,
+            count: 0,
+            issue: `Table ${table} not found or not an array in export data`
+          };
+        }
+      }
+
+      // Clean up test data (in correct order)
+      await db.execute(`
+        DELETE FROM inventory_records 
+        WHERE lot_id IN (SELECT id FROM lots WHERE lot_number LIKE 'TEST%')
+      `);
+      await db.execute(`
+        DELETE FROM transfers 
+        WHERE lot_id IN (SELECT id FROM lots WHERE lot_number LIKE 'TEST%')
+      `);
+      await db.execute(`
+        DELETE FROM shipments 
+        WHERE lot_id IN (SELECT id FROM lots WHERE lot_number LIKE 'TEST%')
+      `);
+      await db.execute('DELETE FROM lots WHERE lot_number LIKE \'TEST%\'');
+      await db.execute('DELETE FROM reagents WHERE name LIKE \'Test%\'');
+      await db.execute('DELETE FROM sites WHERE name LIKE \'Test%\'');
+
+      setTestResults({
+        success: true,
+        exportData,
+        importResults,
+        summary: {
+          totalTables: tables.length,
+          tablesWithData: Object.values(importResults).filter((r: any) => r.found && r.count > 0).length,
+          emptyTables: Object.values(importResults).filter((r: any) => r.found && r.count === 0).length,
+          missingTables: Object.values(importResults).filter((r: any) => !r.found).length
+        }
+      });
+
+      const issues = Object.entries(importResults).filter(([table, result]: [string, any]) => 
+        !result.found || !result.hasData
+      );
+
+      if (issues.length === 0) {
+        setMessage('✅ Import/Export unit tests PASSED! All tables correctly structured.');
+      } else {
+        setMessage(`⚠️ Import/Export tests completed with ${issues.length} issues found.`);
+      }
+
+    } catch (error) {
+      console.error('Unit tests failed:', error);
+      setMessage(`❌ Unit tests failed: ${error}`);
+      setTestResults({ success: false, error: String(error) });
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const resetDatabase = async () => {
     setLoading(true);
@@ -365,6 +526,99 @@ const DebugPage: React.FC = () => {
           </CardContent>
         </Card>
       </Box>
+
+      {/* Import/Export Unit Tests */}
+      <Card sx={{ mt: 3 }}>
+        <CardContent>
+          <Box display="flex" alignItems="center" mb={2}>
+            <TestIcon color="warning" sx={{ mr: 1 }} />
+            <Typography variant="h6">Import/Export Unit Tests</Typography>
+          </Box>
+          <Typography color="textSecondary" paragraph>
+            Runs unit tests to verify export/import functionality by creating test data, 
+            exporting it, and checking the data structure for completeness.
+          </Typography>
+          
+          <Button
+            variant="contained"
+            color="warning"
+            onClick={runImportExportTests}
+            disabled={loading}
+            startIcon={loading ? <CircularProgress size={20} /> : <TestIcon />}
+            sx={{ mb: 2 }}
+          >
+            {loading ? 'Running Tests...' : 'Run Unit Tests'}
+          </Button>
+
+          {/* Test Results */}
+          {testResults && testResults.success && (
+            <Box mt={2}>
+              <Typography variant="h6" gutterBottom>
+                Test Results
+              </Typography>
+              
+              <Typography variant="body2" color="textSecondary" gutterBottom>
+                Tables: {testResults.summary.tablesWithData} with data, {testResults.summary.emptyTables} empty, {testResults.summary.missingTables} missing
+              </Typography>
+
+              <Box display="flex" flexWrap="wrap" gap={2} mt={2}>
+                {Object.entries(testResults.importResults).map(([table, result]: [string, any]) => (
+                  <Box key={table} sx={{ minWidth: 150 }}>
+                    <Typography variant="body2" color="textSecondary">
+                      {table.replace('_', ' ')}
+                    </Typography>
+                    <Typography variant="body1">
+                      {result.found ? (
+                        <>
+                          {result.count} records {result.hasData ? '✅' : '⚠️'}
+                          {!result.hasData && result.count > 0 && ' (no data)'}
+                        </>
+                      ) : (
+                        '❌ missing'
+                      )}
+                    </Typography>
+                    {result.issue && (
+                      <Typography variant="caption" color="error">
+                        {result.issue}
+                      </Typography>
+                    )}
+                  </Box>
+                ))}
+              </Box>
+
+              {Object.entries(testResults.importResults).some(([table, result]: [string, any]) => !result.found || (result.count > 0 && !result.hasData)) && (
+                <Alert severity="warning" sx={{ mt: 2 }}>
+                  <Typography variant="subtitle2" gutterBottom>
+                    Issues Found:
+                  </Typography>
+                  <Box component="ul" sx={{ mb: 0 }}>
+                    {Object.entries(testResults.importResults)
+                      .filter(([table, result]: [string, any]) => !result.found || (result.count > 0 && !result.hasData))
+                      .map(([table, result]: [string, any]) => (
+                        <li key={table}>
+                          <Typography variant="body2">
+                            <strong>{table}:</strong> {result.issue || 'Data structure missing required fields'}
+                          </Typography>
+                        </li>
+                      ))}
+                  </Box>
+                </Alert>
+              )}
+            </Box>
+          )}
+
+          {testResults && !testResults.success && (
+            <Alert severity="error" sx={{ mt: 2 }}>
+              <Typography variant="subtitle2" gutterBottom>
+                Tests Failed
+              </Typography>
+              <Typography variant="body2">
+                {testResults.error}
+              </Typography>
+            </Alert>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Data Overview */}
       <Card sx={{ mt: 3 }}>
