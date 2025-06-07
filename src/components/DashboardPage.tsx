@@ -4,7 +4,6 @@ import {
   Typography,
   Card,
   CardContent,
-  Grid,
   Alert,
   List,
   ListItem,
@@ -22,7 +21,7 @@ import {
 import { getDatabase } from '../utils/database';
 
 interface RiskAlert {
-  id: number;
+  id: string;
   type: 'low_stock' | 'no_recent_inventory' | 'expired' | 'expiring_soon';
   severity: 'error' | 'warning' | 'info';
   site_name: string;
@@ -271,8 +270,8 @@ const DashboardPage: React.FC = () => {
       </Box>
 
       {/* Stats Cards */}
-      <Grid container spacing={3} mb={4}>
-        <Grid item xs={12} sm={6} md={2}>
+      <Box display="flex" flexWrap="wrap" gap={3} mb={4}>
+        <Box flex="1" minWidth="200px">
           <Card>
             <CardContent>
               <Typography color="textSecondary" gutterBottom>
@@ -283,9 +282,9 @@ const DashboardPage: React.FC = () => {
               </Typography>
             </CardContent>
           </Card>
-        </Grid>
+        </Box>
         
-        <Grid item xs={12} sm={6} md={2}>
+        <Box flex="1" minWidth="200px">
           <Card>
             <CardContent>
               <Typography color="textSecondary" gutterBottom>
@@ -296,9 +295,9 @@ const DashboardPage: React.FC = () => {
               </Typography>
             </CardContent>
           </Card>
-        </Grid>
+        </Box>
 
-        <Grid item xs={12} sm={6} md={2}>
+        <Box flex="1" minWidth="200px">
           <Card sx={{ borderLeft: '4px solid #f44336' }}>
             <CardContent>
               <Typography color="textSecondary" gutterBottom>
@@ -309,9 +308,9 @@ const DashboardPage: React.FC = () => {
               </Typography>
             </CardContent>
           </Card>
-        </Grid>
+        </Box>
 
-        <Grid item xs={12} sm={6} md={2}>
+        <Box flex="1" minWidth="200px">
           <Card sx={{ borderLeft: '4px solid #ff9800' }}>
             <CardContent>
               <Typography color="textSecondary" gutterBottom>
@@ -322,9 +321,9 @@ const DashboardPage: React.FC = () => {
               </Typography>
             </CardContent>
           </Card>
-        </Grid>
+        </Box>
 
-        <Grid item xs={12} sm={6} md={2}>
+        <Box flex="1" minWidth="200px">
           <Card sx={{ borderLeft: '4px solid #2196f3' }}>
             <CardContent>
               <Typography color="textSecondary" gutterBottom>
@@ -335,9 +334,9 @@ const DashboardPage: React.FC = () => {
               </Typography>
             </CardContent>
           </Card>
-        </Grid>
+        </Box>
 
-        <Grid item xs={12} sm={6} md={2}>
+        <Box flex="1" minWidth="200px">
           <Card sx={{ borderLeft: '4px solid #9e9e9e' }}>
             <CardContent>
               <Typography color="textSecondary" gutterBottom>
@@ -348,8 +347,8 @@ const DashboardPage: React.FC = () => {
               </Typography>
             </CardContent>
           </Card>
-        </Grid>
-      </Grid>
+        </Box>
+      </Box>
 
       {/* Risk Alerts */}
       <Card>

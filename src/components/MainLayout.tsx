@@ -19,7 +19,6 @@ import {
   Business,
   Science,
   LocalShipping,
-  SwapHoriz,
   Assessment,
   BugReport,
   ImportExport,

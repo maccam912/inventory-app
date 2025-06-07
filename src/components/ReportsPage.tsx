@@ -8,14 +8,12 @@ import {
   InputLabel,
   Select,
   MenuItem,
-  Grid,
   CircularProgress,
   Chip,
   Button,
   TextField,
 } from '@mui/material';
 import {
-  LineChart,
   Line,
   XAxis,
   YAxis,
@@ -25,7 +23,6 @@ import {
   ResponsiveContainer,
   ReferenceLine,
   Area,
-  AreaChart,
   ComposedChart,
 } from 'recharts';
 import { getDatabase } from '../utils/database';
@@ -136,11 +133,10 @@ const ReportsPage: React.FC = () => {
 
   const loadCumulativeFlowChart = async (db: any, siteId: number, lotId: number) => {
     const dataPoints: InventoryDataPoint[] = [];
-    const simulatedTodayDate = new Date(simulatedToday);
 
     // Get all events for this specific site/lot combination
     // Get shipments received at this site for this lot (up to simulated today)
-    const shipments = await db.select<any[]>(`
+    const shipments = await db.select(`
       SELECT sh.received_date as date, sh.quantity,
              s.name as site_name, r.name as reagent_name, l.lot_number
       FROM shipments sh
@@ -154,7 +150,7 @@ const ReportsPage: React.FC = () => {
     `, [siteId, lotId, simulatedToday]);
 
     // Get transfers into this site for this lot (up to simulated today)
-    const transfersIn = await db.select<any[]>(`
+    const transfersIn = await db.select(`
       SELECT t.transfer_date as date, t.quantity,
              s.name as site_name, r.name as reagent_name, l.lot_number
       FROM transfers t
@@ -166,7 +162,7 @@ const ReportsPage: React.FC = () => {
     `, [siteId, lotId, simulatedToday]);
 
     // Get transfers out of this site for this lot (up to simulated today)
-    const transfersOut = await db.select<any[]>(`
+    const transfersOut = await db.select(`
       SELECT t.transfer_date as date, -t.quantity as quantity,
              s.name as site_name, r.name as reagent_name, l.lot_number
       FROM transfers t
@@ -178,7 +174,7 @@ const ReportsPage: React.FC = () => {
     `, [siteId, lotId, simulatedToday]);
 
     // Get inventory snapshots for this site/lot (up to simulated today)
-    const inventoryRecords = await db.select<any[]>(`
+    const inventoryRecords = await db.select(`
       SELECT ir.recorded_date as date, ir.quantity_on_hand as quantity,
              s.name as site_name, r.name as reagent_name, l.lot_number
       FROM inventory_records ir
@@ -191,18 +187,18 @@ const ReportsPage: React.FC = () => {
 
     // Combine all receiving events (shipments + transfers in)
     const receivingEvents = [
-      ...shipments.map(s => ({ ...s, event_type: 'shipment' as const })),
-      ...transfersIn.map(t => ({ ...t, event_type: 'transfer_in' as const })),
+      ...shipments.map((s: any) => ({ ...s, event_type: 'shipment' as const })),
+      ...transfersIn.map((t: any) => ({ ...t, event_type: 'transfer_in' as const })),
     ].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
     // Combine all outgoing events (transfers out)
-    const outgoingEvents = transfersOut.map(t => ({ ...t, event_type: 'transfer_out' as const }));
+    const outgoingEvents = transfersOut.map((t: any) => ({ ...t, event_type: 'transfer_out' as const }));
 
     // All events combined
     const allEvents = [
       ...receivingEvents,
       ...outgoingEvents,
-      ...inventoryRecords.map(r => ({ ...r, event_type: 'inventory' as const })),
+      ...inventoryRecords.map((r: any) => ({ ...r, event_type: 'inventory' as const })),
     ].filter(event => event.date)
      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
@@ -277,10 +273,9 @@ const ReportsPage: React.FC = () => {
 
   const loadAggregatedLotChart = async (db: any, lotId: number) => {
     const dataPoints: InventoryDataPoint[] = [];
-    const simulatedTodayDate = new Date(simulatedToday);
 
     // Get all shipments for this lot across all sites (up to simulated today)
-    const shipments = await db.select<any[]>(`
+    const shipments = await db.select(`
       SELECT sh.received_date as date, SUM(sh.quantity) as quantity,
              r.name as reagent_name, l.lot_number
       FROM shipments sh
@@ -294,7 +289,7 @@ const ReportsPage: React.FC = () => {
     `, [lotId, simulatedToday]);
 
     // Get all transfers for this lot across all sites (up to simulated today)
-    const transfersIn = await db.select<any[]>(`
+    const transfersIn = await db.select(`
       SELECT t.transfer_date as date, SUM(t.quantity) as quantity,
              r.name as reagent_name, l.lot_number
       FROM transfers t
@@ -305,7 +300,7 @@ const ReportsPage: React.FC = () => {
       ORDER BY t.transfer_date ASC
     `, [lotId, simulatedToday]);
 
-    const transfersOut = await db.select<any[]>(`
+    const transfersOut = await db.select(`
       SELECT t.transfer_date as date, -SUM(t.quantity) as quantity,
              r.name as reagent_name, l.lot_number
       FROM transfers t
@@ -317,7 +312,7 @@ const ReportsPage: React.FC = () => {
     `, [lotId, simulatedToday]);
 
     // Get aggregated inventory records for this lot (sum across all sites by date)
-    const inventoryRecords = await db.select<any[]>(`
+    const inventoryRecords = await db.select(`
       SELECT ir.recorded_date as date, SUM(ir.quantity_on_hand) as quantity,
              r.name as reagent_name, l.lot_number
       FROM inventory_records ir
@@ -330,10 +325,10 @@ const ReportsPage: React.FC = () => {
 
     // Combine all events
     const allEvents = [
-      ...shipments.map(s => ({ ...s, event_type: 'shipment' as const })),
-      ...transfersIn.map(t => ({ ...t, event_type: 'transfer_in' as const })),
-      ...transfersOut.map(t => ({ ...t, event_type: 'transfer_out' as const })),
-      ...inventoryRecords.map(r => ({ ...r, event_type: 'inventory' as const })),
+      ...shipments.map((s: any) => ({ ...s, event_type: 'shipment' as const })),
+      ...transfersIn.map((t: any) => ({ ...t, event_type: 'transfer_in' as const })),
+      ...transfersOut.map((t: any) => ({ ...t, event_type: 'transfer_out' as const })),
+      ...inventoryRecords.map((r: any) => ({ ...r, event_type: 'inventory' as const })),
     ].filter(event => event.date)
      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
@@ -404,7 +399,7 @@ const ReportsPage: React.FC = () => {
     setInventoryData(dataPoints);
   };
 
-  const formatTooltip = (value: any, name: string, props: any) => {
+  const formatTooltip = (value: any, name: string) => {
     if (name === 'cumulative_received') {
       return [`${value} units`, 'Total Received'];
     } else if (name === 'cumulative_used') {
@@ -481,8 +476,8 @@ const ReportsPage: React.FC = () => {
           <Typography variant="h6" gutterBottom>
             Filters
           </Typography>
-          <Grid container spacing={3}>
-            <Grid item xs={12} md={6}>
+          <Box display="flex" flexWrap="wrap" gap={3}>
+            <Box flex="1" minWidth="250px">
               <FormControl fullWidth>
                 <InputLabel>Site</InputLabel>
                 <Select
@@ -498,8 +493,8 @@ const ReportsPage: React.FC = () => {
                   ))}
                 </Select>
               </FormControl>
-            </Grid>
-            <Grid item xs={12} md={6}>
+            </Box>
+            <Box flex="1" minWidth="250px">
               <FormControl fullWidth>
                 <InputLabel>Lot</InputLabel>
                 <Select
@@ -515,8 +510,8 @@ const ReportsPage: React.FC = () => {
                   ))}
                 </Select>
               </FormControl>
-            </Grid>
-          </Grid>
+            </Box>
+          </Box>
           <Box mt={2} display="flex" gap={1} alignItems="center">
             <Chip label={getFilterDescription()} variant="outlined" />
             <Chip 
@@ -536,40 +531,40 @@ const ReportsPage: React.FC = () => {
             <Typography variant="h6" gutterBottom>
               Usage Statistics
             </Typography>
-            <Grid container spacing={3}>
-              <Grid item xs={12} sm={6} md={3}>
+            <Box display="flex" flexWrap="wrap" gap={3}>
+              <Box flex="1" minWidth="200px">
                 <Typography color="textSecondary" gutterBottom>
                   Total Consumed
                 </Typography>
                 <Typography variant="h5">
                   {usageStats.total_consumed.toFixed(1)} units
                 </Typography>
-              </Grid>
-              <Grid item xs={12} sm={6} md={3}>
+              </Box>
+              <Box flex="1" minWidth="200px">
                 <Typography color="textSecondary" gutterBottom>
                   Avg Daily Usage
                 </Typography>
                 <Typography variant="h5">
                   {usageStats.average_daily_usage.toFixed(2)} units/day
                 </Typography>
-              </Grid>
-              <Grid item xs={12} sm={6} md={3}>
+              </Box>
+              <Box flex="1" minWidth="200px">
                 <Typography color="textSecondary" gutterBottom>
                   Days of Data
                 </Typography>
                 <Typography variant="h5">
                   {usageStats.days_of_data} days
                 </Typography>
-              </Grid>
-              <Grid item xs={12} sm={6} md={3}>
+              </Box>
+              <Box flex="1" minWidth="200px">
                 <Typography color="textSecondary" gutterBottom>
                   Est. Days Remaining
                 </Typography>
                 <Typography variant="h5" color={usageStats.projected_days_remaining < 30 ? 'warning.main' : 'text.primary'}>
                   {usageStats.projected_days_remaining} days
                 </Typography>
-              </Grid>
-            </Grid>
+              </Box>
+            </Box>
           </CardContent>
         </Card>
       )}
@@ -705,12 +700,12 @@ const ReportsPage: React.FC = () => {
                     dataKey="current_inventory"
                     stroke="#2196f3"
                     strokeWidth={2}
-                    dot={(props) => {
+                    dot={(props: any) => {
                       const { payload } = props;
-                      if (payload.event_type === 'inventory') {
+                      if (payload && payload.event_type === 'inventory') {
                         return <circle {...props} fill="#2196f3" r={4} />;
                       }
-                      return null;
+                      return <circle {...props} fill="transparent" r={0} />;
                     }}
                     name="Current Inventory"
                   />

@@ -8,7 +8,6 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
-  IconButton,
   Paper,
   Table,
   TableBody,
@@ -26,7 +25,6 @@ import {
 } from '@mui/material';
 import {
   Add as AddIcon,
-  Visibility as ViewIcon,
 } from '@mui/icons-material';
 import { Site, InventoryRecord } from '../types';
 import { getDatabase } from '../utils/database';

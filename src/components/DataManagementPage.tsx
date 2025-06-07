@@ -16,7 +16,6 @@ import {
   InputLabel,
   Select,
   MenuItem,
-  Grid,
   Divider,
 } from '@mui/material';
 import {
@@ -212,9 +211,9 @@ const DataManagementPage: React.FC = () => {
         </Alert>
       )}
 
-      <Grid container spacing={3}>
+      <Box display="flex" flexWrap="wrap" gap={3}>
         {/* Export Section */}
-        <Grid item xs={12} md={6}>
+        <Box flex="1" minWidth="400px">
           <Card>
             <CardContent>
               <Box display="flex" alignItems="center" mb={2}>
@@ -269,10 +268,10 @@ const DataManagementPage: React.FC = () => {
               </Box>
             </CardContent>
           </Card>
-        </Grid>
+        </Box>
 
         {/* Import Section */}
-        <Grid item xs={12} md={6}>
+        <Box flex="1" minWidth="400px">
           <Card>
             <CardContent>
               <Box display="flex" alignItems="center" mb={2}>
@@ -317,8 +316,8 @@ const DataManagementPage: React.FC = () => {
               </Typography>
             </CardContent>
           </Card>
-        </Grid>
-      </Grid>
+        </Box>
+      </Box>
 
       {/* Data Format Information */}
       <Card sx={{ mt: 3 }}>
